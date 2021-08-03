@@ -3,9 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
-	"io/ioutil"
 	"math"
 	"path/filepath"
 	"strconv"
@@ -60,67 +58,38 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	_ = out
-	Sfln(Shakespeare("%v"), len(out))
-	// spew.Dump(out)
-	if false {
-		for _, v := range out {
-			spew.Dump(v.Pubkey)
-			bin := v.Account.Data.GetBinary()
-			spew.Dump(bin)
-
-			err := ioutil.WriteFile(Sf("out/out_%s.bin", v.Pubkey), bin, 0666)
-			if err != nil {
-				panic(err)
-			}
-
-			return
-		}
-	}
 
 	targets := []solana.PublicKey{}
 	isProd := true
-	if isProd {
-		for accountIndex := range out {
-			targets = append(targets,
-				out[accountIndex].Pubkey,
-			)
-		}
-	} else {
-		// test accounts:
+	for accountIndex := range out {
 		targets = append(targets,
-			// solana.MustPublicKeyFromBase58("368eVLhAcKhH3tu4D4ZGFYagtWoWwsrQ2zuTAxY7nS72"), // master
-			// solana.MustPublicKeyFromBase58("5i21bHeMgtpcceNFqzMEQaX3nA1scbdDjxV2p4MwuJti"), // cody
-			// solana.MustPublicKeyFromBase58("BFKSqBYQgYa6GRUaoE2sdyD4PmT1g3M1Nn7WAGau4UKW"), // 💎
-			solana.MustPublicKeyFromBase58("6Wc7vr3EAQaXbr46yjTi24dPdSwFWDkwQ1HAtRQZW3BU"), //
+			out[accountIndex].Pubkey,
 		)
 	}
 
-	Sfln("%v targets", len(targets))
+	Sfln(Shakespeare("%v targets"), len(targets))
 	if isProd {
 		time.Sleep(time.Second * 5)
 	}
 
-	if true {
-		for _, auctionPubkey := range targets {
-			Sfln(OrangeBG("%s"), auctionPubkey)
-			if isProd && hasByAuctionKey(stm, auctionPubkey) {
-				Ln("already done; skipping")
-			} else {
-				err := processAuction(stm, client, auctionPubkey, isProd)
+	for _, auctionPubkey := range targets {
+		Sfln(OrangeBG("%s"), auctionPubkey)
+		if isProd && hasByAuctionKey(stm, auctionPubkey) {
+			Ln("already done; skipping")
+		} else {
+			err := processAuction(stm, client, auctionPubkey, isProd)
+			if err != nil {
+				if strings.Contains(err.Error(), "Connection rate limits exceeded") {
+					Ln(err.Error())
+					time.Sleep(time.Minute)
+					continue
+				}
+				Sfln(Red("err while %s: %s"), auctionPubkey, err)
+				err = stm.Append(&EmptyItem{
+					AuctionKey: auctionPubkey,
+				})
 				if err != nil {
-					if strings.Contains(err.Error(), "Connection rate limits exceeded") {
-						Ln(err.Error())
-						time.Sleep(time.Minute)
-						continue
-					}
-					Sfln(Red("err while %s: %s"), auctionPubkey, err)
-					err = stm.Append(&EmptyItem{
-						AuctionKey: auctionPubkey,
-					})
-					if err != nil {
-						panic(err)
-					}
+					panic(err)
 				}
 			}
 		}
@@ -133,17 +102,6 @@ func main() {
 	// 		- get transactions for auctionAccount
 	//      - get first transaction: get inner instructions; last inner instruction on(namesLPneVptA9Z5rqUDD9tMTWEJwofgaYwp8cawRkX) contains the name
 	// 		- after last 00 00 00 comes the domain
-	if false {
-		decoded, err := hex.DecodeString("01000000000800000004000000f09f93b7")
-		if err != nil {
-			panic(err)
-		}
-		spew.Dump(decoded)
-		err = ioutil.WriteFile(Sf("tx/out_%s.bin", time.Now().Format(FilenameTimeFormat)), decoded, 0666)
-		if err != nil {
-			panic(err)
-		}
-	}
 }
 
 func processAuction(
