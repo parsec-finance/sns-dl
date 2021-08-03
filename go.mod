@@ -1,4 +1,4 @@
-module github.com/gagliardetto/demo-bonfida-naming
+module github.com/gagliardetto/sns-dl
 
 go 1.16
 
