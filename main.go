@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
@@ -31,6 +32,7 @@ var (
 	isProd                   bool
 	domainsFileDir           string
 	domainsFileName          string
+	maxConcurrency           int
 	fileMode                 uint64
 )
 
@@ -50,6 +52,8 @@ func main() {
 	fileModeS := os.Getenv("FILE_MODE")
 	fileMode, err = strconv.ParseUint(fileModeS, 8, 32)
 	checkError(err)
+	maxConcurrencyS := os.Getenv("MAX_CONCURRENCY")
+	maxConcurrency, err = strconv.Atoi(maxConcurrencyS)
 
 	MustCreateFolderIfNotExists(domainsFileDir, fs.FileMode(fileMode))
 
@@ -64,7 +68,11 @@ func main() {
 	defer stm.Close()
 
 	c := rpc.NewWithCustomRPCClient(rpcWithRate)
+
+	start := time.Now()
 	run(c, stm)
+	end := time.Now()
+	fmt.Printf("Finished in %v seconds", end.Sub(start).Seconds())
 }
 
 func run(client *rpc.Client, stm *streamject.Stream) {
@@ -89,26 +97,37 @@ func run(client *rpc.Client, stm *streamject.Stream) {
 		time.Sleep(time.Second * 5)
 	}
 
-	for _, auctionPubkey := range targets {
-		Sfln(OrangeBG("%s"), auctionPubkey)
-		if isProd && hasByAuctionKey(stm, auctionPubkey) {
-			Ln(fmt.Sprintf("%s auctionPubkey already done; skipping", auctionPubkey))
-			continue
-		}
-		err := processAuction(stm, client, auctionPubkey, isProd)
-		if err != nil {
-			if strings.Contains(err.Error(), "Connection rate limits exceeded") {
-				Ln(fmt.Sprintf("%s auctionPubkey is being ratelimited: %s", auctionPubkey, err.Error()))
-				time.Sleep(time.Minute)
-				continue
+	guard := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+	for i := range targets {
+		guard <- struct{}{}
+		wg.Add(1)
+		go (func(auctionPubkey solana.PublicKey, guard chan struct{}, wg sync.WaitGroup) {
+			defer (func() {
+				wg.Done()
+				<-guard
+			})()
+			Sfln(OrangeBG("%s"), auctionPubkey)
+			if isProd && hasByAuctionKey(stm, auctionPubkey) {
+				Ln(fmt.Sprintf("%s auctionPubkey already done; skipping", auctionPubkey))
+				return
 			}
-			Sfln(Red("err while %s: %s"), auctionPubkey, err)
-			err = stm.Append(&EmptyItem{
-				AuctionKey: auctionPubkey,
-			})
-			checkError(err)
-		}
+			err := processAuction(stm, client, auctionPubkey, isProd)
+			if err != nil {
+				if strings.Contains(err.Error(), "Connection rate limits exceeded") {
+					Ln(fmt.Sprintf("%s auctionPubkey is being ratelimited: %s", auctionPubkey, err.Error()))
+					time.Sleep(time.Second)
+					return
+				}
+				Sfln(Red("err while %s: %s"), auctionPubkey, err)
+				err = stm.Append(&EmptyItem{
+					AuctionKey: auctionPubkey,
+				})
+				checkError(err)
+			}
+		})(targets[i], guard, wg)
 	}
+	wg.Wait()
 	Sfln(Shakespeare("%v"), len(out))
 
 	// TODO:
