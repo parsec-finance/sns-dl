@@ -32,6 +32,7 @@ var (
 	isProd                   bool
 	domainsFileDir           string
 	domainsFileName          string
+	rps                      int
 	maxConcurrency           int
 	fileMode                 uint64
 )
@@ -54,12 +55,16 @@ func main() {
 	checkError(err)
 	maxConcurrencyS := os.Getenv("MAX_CONCURRENCY")
 	maxConcurrency, err = strconv.Atoi(maxConcurrencyS)
+	checkError(err)
+	rpsS := os.Getenv("REQUESTS_PER_SECOND")
+	rps, err = strconv.Atoi(rpsS)
+	checkError(err)
 
 	MustCreateFolderIfNotExists(domainsFileDir, fs.FileMode(fileMode))
 
 	rpcWithRate := rpc.NewWithRateLimit(
 		os.Getenv("RPC_ENDPOINT"),
-		3,
+		rps,
 	)
 
 	path := filepath.Join(domainsFileDir, domainsFileName)
@@ -102,7 +107,7 @@ func run(client *rpc.Client, stm *streamject.Stream) {
 	for i := range targets {
 		guard <- struct{}{}
 		wg.Add(1)
-		go (func(auctionPubkey solana.PublicKey, guard chan struct{}, wg sync.WaitGroup) {
+		go (func(auctionPubkey solana.PublicKey, guard chan struct{}, wg *sync.WaitGroup) {
 			defer (func() {
 				wg.Done()
 				<-guard
@@ -125,7 +130,7 @@ func run(client *rpc.Client, stm *streamject.Stream) {
 				})
 				checkError(err)
 			}
-		})(targets[i], guard, wg)
+		})(targets[i], guard, &wg)
 	}
 	wg.Wait()
 	Sfln(Shakespeare("%v"), len(out))
